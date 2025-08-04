@@ -10,83 +10,82 @@ stages:
 - stage: CheckoutCode
   displayName: 'Checkout Code'
   jobs:
-  - job: checkout
-    displayName: 'Checkout Code'
-    steps:
-    - checkout: self
+    - job: checkout
+      displayName: 'Checkout Code'
+      steps:
+        - checkout: self
 
 # Stage 2: Build Docker image
 - stage: BuildDockerImage
   displayName: 'Build Docker Image'
   dependsOn: CheckoutCode
   jobs:
-  - job: build
-    displayName: 'Build Docker Image'
-    steps:
-    - script: |
-        docker --version
-        docker info
-      displayName: 'Verify Docker Access'
-    
-    - task: Docker@2
+    - job: build
       displayName: 'Build Docker Image'
-      inputs:
-        containerRegistry: 'devops'     # ✅ Use existing connection
-        repository: 'perseverance-project'
-        command: 'build'
-        Dockerfile: '**/Dockerfile'
-        tags: |
-          $(version)
-      name: buildImage
+      steps:
+        - script: |
+            docker --version
+            docker info
+          displayName: 'Verify Docker Access'
+
+        - task: Docker@2
+          displayName: 'Build Docker Image'
+          inputs:
+            containerRegistry: 'devops'   # ✅ Matches the service connection name
+            repository: 'perseverance-project'
+            command: 'build'
+            Dockerfile: '**/Dockerfile'
+            tags: |
+              $(version)
+          name: buildImage
 
 # Stage 3: Push Docker image to ACR
 - stage: PushDockerImage
   displayName: 'Push Docker Image'
   dependsOn: BuildDockerImage
   jobs:
-  - job: push
-    displayName: 'Push Docker Image to ACR'
-    steps:
-    - task: Docker@2
-      displayName: 'Push Docker Image'
-      inputs:
-        containerRegistry: 'devops'     # ✅ Use existing connection
-        repository: 'perseverance-project'
-        command: 'push'
-        tags: |
-          $(version)
+    - job: push
+      displayName: 'Push Docker Image to ACR'
+      steps:
+        - task: Docker@2
+          displayName: 'Push Docker Image'
+          inputs:
+            containerRegistry: 'devops'   # ✅ Matches the service connection name
+            repository: 'perseverance-project'
+            command: 'push'
+            tags: |
+              $(version)
 
 # Stage 4: Clean up Docker images (optional for self-hosted agents)
 - stage: CleanupDockerImages
   displayName: 'Clean Up Docker Images'
   dependsOn: PushDockerImage
   jobs:
-  - job: cleanup
-    displayName: 'Clean Up Docker Images'
-    steps:
-    - script: |
-        docker rmi -f $(docker images -q)
-      displayName: 'Remove all Docker images'
+    - job: cleanup
+      displayName: 'Clean Up Docker Images'
+      steps:
+        - script: |
+            docker rmi -f $(docker images -q) || true
+          displayName: 'Remove all Docker images'
 
 # Stage 5: Modify and publish Kubernetes manifest
 - stage: ModifyAndPublishYaml
   displayName: 'Modify and Publish Kubernetes Manifest'
   dependsOn: CleanupDockerImages
   jobs:
-  - job: modifyAndPublish
-    displayName: 'Modify Kubernetes Manifest and Publish'
-    steps:
-    - script: |
-        echo "Replacing VERSION with $(version) in backend.yml"
-        sed -i "s|VERSION|$(version)|g" backend.yml
-        sed -i "s|deveops.azurecr.io|devops.azurecr.io|g" backend.yml  # ✅ Fix typo if needed
-        cat backend.yml
-        cp backend.yml $(Build.ArtifactStagingDirectory)/
-      displayName: 'Modify Kubernetes Manifest'
+    - job: modifyAndPublish
+      displayName: 'Modify Kubernetes Manifest and Publish'
+      steps:
+        - script: |
+            echo "Replacing VERSION with $(version) in backend.yml"
+            sed -i "s|VERSION|$(version)|g" backend.yml
+            cat backend.yml
+            cp backend.yml $(Build.ArtifactStagingDirectory)/
+          displayName: 'Modify Kubernetes Manifest'
 
-    - task: PublishBuildArtifacts@1
-      displayName: 'Publish Modified Kubernetes Manifest'
-      inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'k8s-manifest'
-        publishLocation: 'Container'
+        - task: PublishBuildArtifacts@1
+          displayName: 'Publish Modified Kubernetes Manifest'
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'k8s-manifest'
+            publishLocation: 'Container'
