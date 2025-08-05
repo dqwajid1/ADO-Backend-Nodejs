@@ -1,91 +1,52 @@
-pool:
-  name: 'dev-pool'
-
-variables:
-  version: 'backend_$(Build.BuildId)'
-
-stages:
-
-# Stage 1: Checkout source code
-- stage: CheckoutCode
-  displayName: 'Checkout Code'
-  jobs:
-    - job: checkout
-      displayName: 'Checkout Code'
-      steps:
-        - checkout: self
-
-# Stage 2: Build Docker image
-- stage: BuildDockerImage
-  displayName: 'Build Docker Image'
-  dependsOn: CheckoutCode
-  jobs:
-    - job: build
-      displayName: 'Build Docker Image'
-      steps:
-        - script: |
-            docker --version
-            docker info
-          displayName: 'Verify Docker Access'
-
-        - task: Docker@2
-          displayName: 'Build Docker Image'
-          inputs:
-            containerRegistry: 'devops'   # ✅ Matches the service connection name
-            repository: 'perseverance-project'
-            command: 'build'
-            Dockerfile: '**/Dockerfile'
-            tags: |
-              $(version)
-          name: buildImage
-
-# Stage 3: Push Docker image to ACR
-- stage: PushDockerImage
-  displayName: 'Push Docker Image'
-  dependsOn: BuildDockerImage
-  jobs:
-    - job: push
-      displayName: 'Push Docker Image to ACR'
-      steps:
-        - task: Docker@2
-          displayName: 'Push Docker Image'
-          inputs:
-            containerRegistry: 'devops'   # ✅ Matches the service connection name
-            repository: 'perseverance-project'
-            command: 'push'
-            tags: |
-              $(version)
-
-# Stage 4: Clean up Docker images (optional for self-hosted agents)
-- stage: CleanupDockerImages
-  displayName: 'Clean Up Docker Images'
-  dependsOn: PushDockerImage
-  jobs:
-    - job: cleanup
-      displayName: 'Clean Up Docker Images'
-      steps:
-        - script: |
-            docker rmi -f $(docker images -q) || true
-          displayName: 'Remove all Docker images'
-
-# Stage 5: Modify and publish Kubernetes manifest
-- stage: ModifyAndPublishYaml
-  displayName: 'Modify and Publish Kubernetes Manifest'
-  dependsOn: CleanupDockerImages
-  jobs:
-    - job: modifyAndPublish
-      displayName: 'Modify Kubernetes Manifest and Publish'
-      steps:
-        - script: |
-            echo "Replacing VERSION with $(version) in backend.yml"
-            sed -i "s|VERSION|$(version)|g" backend.yml
-            cat backend.yml
-            cp backend.yml $(Build.ArtifactStagingDirectory)/
-          displayName: 'Modify Kubernetes Manifest'
-
-        - task: PublishBuildArtifacts@1
-          displayName: 'Publish Modified Kubernetes Manifest'
-          inputs:
-            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-            ArtifactName: 'k8s-manifest'
-            publishLocation: 'Container'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: three-tier
+  labels:
+    role: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      role: backend
+  template:
+    metadata:
+      labels:
+        role: backend
+    spec:
+      containers:
+      - name: backend-api
+        image: deveops.azurecr.io/perseverance-project:VERSION
+        imagePullPolicy: Always
+        env:
+          - name: DB_CONN_STR
+            value: mongodb://mongodb-svc:27017/perseverance?directConnection=true
+          - name: DB_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: db-secret
+                key: username
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: db-secret
+                key: password
+        ports:
+        - containerPort: 3100
+      imagePullSecrets:
+      - name: acr-creds
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service-api
+  namespace: three-tier
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 3100
+    nodePort: 30008
+  selector:
+    role: backend
